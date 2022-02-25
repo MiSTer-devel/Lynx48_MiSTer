@@ -1,0 +1,27 @@
+# -------------------------------------------------------------------------- #
+#
+# Copyright (C) 2017  Intel Corporation. All rights reserved.
+# Your use of Intel Corporation's design tools, logic functions 
+# and other software and tools, and its AMPP partner logic 
+set_global_assignment -name VERILOG_FILE rtl/video.v
+set_global_assignment -name VERILOG_FILE rtl/audio.v
+set_global_assignment -name VERILOG_FILE rtl/spr.v
+set_global_assignment -name VERILOG_FILE rtl/multiboot.v
+set_global_assignment -name VERILOG_FILE rtl/lynx48.v
+set_global_assignment -name VERILOG_FILE rtl/lfsr.v
+set_global_assignment -name VERILOG_FILE rtl/keyboard.v
+set_global_assignment -name VERILOG_FILE rtl/cassette.v
+set_global_assignment -name VERILOG_FILE rtl/rom.v
+set_global_assignment -name VERILOG_FILE rtl/UM6845R.v
+set_global_assignment -name VERILOG_FILE rtl/dpr.v
+set_global_assignment -name VERILOG_FILE rtl/cpu.v
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/bram.sv
+set_global_assignment -name VHDL_FILE rtl/T80/T80pa.vhd
+set_global_assignment -name VHDL_FILE rtl/T80/T80_Reg.vhd
+set_global_assignment -name VHDL_FILE rtl/T80/T80_Pack.vhd
+set_global_assignment -name VHDL_FILE rtl/T80/T80_MCode.vhd
+set_global_assignment -name VHDL_FILE rtl/T80/T80_ALU.vhd
+set_global_assignment -name VHDL_FILE rtl/T80/T80.vhd
+set_global_assignment -name QIP_FILE rtl/TV80/TV80.qip
+set_global_assignment -name QIP_FILE sys/sys.qip
+set_global_assignment -name SYSTEMVERILOG_FILE Lynx_48.sv
