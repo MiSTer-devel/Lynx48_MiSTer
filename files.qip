@@ -24,4 +24,5 @@ set_global_assignment -name VHDL_FILE rtl/T80/T80_ALU.vhd
 set_global_assignment -name VHDL_FILE rtl/T80/T80.vhd
 set_global_assignment -name QIP_FILE rtl/TV80/TV80.qip
 set_global_assignment -name QIP_FILE sys/sys.qip
-set_global_assignment -name SYSTEMVERILOG_FILE Lynx_48.sv
+set_global_assignment -name SDC_FILE Lynx48.sdc
+set_global_assignment -name SYSTEMVERILOG_FILE Lynx48.sv
