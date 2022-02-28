@@ -192,7 +192,7 @@ assign BUTTONS = 0;
 
 //////////////////////////////////////////////////////////////////
 
-assign VIDEO_ARX = status[5] ? 8'd16 : 8'd4;
+assign VIDEO_ARX = status[5] ? 8'd16 : 8'd4; 
 assign VIDEO_ARY = status[5] ? 8'd9  : 8'd3; 
 
 `include "build_id.v" 
@@ -204,10 +204,12 @@ localparam CONF_STR = {
 	"O5,Aspect ratio,4:3,16:9;",
 	"O12,Scandoubler Fx,None,HQ2x,CRT 25%,CRT 50%;",
 	"-;",
-	"O34,Machine,Lynx 48K,Lynx 96k,96k Scorpion;",
-	//"O5,BASIC Autostart,Off,On;",	
+	"O34,Machine,Lynx 48K,Lynx 96k,96k Scorpion,Lynx 128k;",
+	"O6,BASIC Autostart,On,Off;",	
 	"-;",
 	"OD,Joysticks Swap,No,Yes;",
+	"-;",	
+	"T0,Reset;",	
 	"R0,Reset and close OSD;",
 	"J,Button;",
 	"jn,A;",
@@ -237,7 +239,8 @@ wire [15:0]joystick_1;
 wire [5:0] joy_0 = status[13] ? joystick_1[5:0] : joystick_0[5:0];
 wire [5:0] joy_1 = status[13] ? joystick_0[5:0] : joystick_1[5:0];
 
-wire basic_autostart = status[5] ? 1'b1 : 1'b0;
+wire autostart_basic = status[6] ? 1'b0 : 1'b1;
+//wire [1:0] autostart_basic = status[6:1];
 
 hps_io #(.CONF_STR(CONF_STR), .PS2DIV(1103)) hps_io
 (

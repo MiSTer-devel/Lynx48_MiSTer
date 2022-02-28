@@ -70,8 +70,9 @@ always @(posedge clk)
                 if(ioctl_dout=='h22)
                 begin
                     tape_complete <= 1'b0;                    
-	            loadPoint <= 'h694d;
-                    //execPoint <= 'h0cc1;
+	                loadPoint <= 'h694d;
+                    execPoint <= 'h6800;
+                    //execPoint <= 'h0cc1;                    
                     previous_state <= state;
                     state <= SM_SECONDQUOTE;
                 end
@@ -94,7 +95,6 @@ always @(posedge clk)
 		            if (ioctl_dout!='hA5)   // A5 is to be ignored
                     begin
                           state <= SM_PROGRAMLO;
-   
                     end
                 end
 
@@ -182,9 +182,9 @@ always @(posedge clk)
                     previous_state <= state;               
 		            if (fileType=='h4D)        // Machine Code
 		            begin
-                      state <= SM_COMPLETED; 
-                      tape_complete <= 1'b1;
-	              tape_addr <= {ioctl_dout,execPoint[7:0]} ; 
+                        state <= SM_COMPLETED; 
+                        tape_complete <= 1'b1;
+	                    tape_addr <= {ioctl_dout,execPoint[7:0]} ; 
                     end
 	  	            else
                        state <= SM_PROGRAMCODE;    
@@ -208,11 +208,14 @@ always @(posedge clk)
                     end
                     else if (programLength=='h0 && fileType=='h42)
                     begin
-                        if(autostart_basic)
-                            tape_complete <= 1'b1;
-
                         previous_state <= state;               
                         state <= SM_COMPLETED; 
+
+                        if(autostart_basic)
+                        begin
+                            tape_addr <= execPoint; 
+                            tape_complete <= 1'b1;
+                        end
                     end
 
                 end
@@ -228,23 +231,24 @@ always @(posedge clk)
                 begin
                     mysteryByte <= ioctl_dout;  
                     previous_state <= state;   
-		    if (fileType=='h4D)        // Machine Code
-                    begin
-                      state <=  SM_EXECPOINTLO;
-                    end
-		    else
-		    begin
-                      state <= SM_COMPLETED; 
-                      tape_complete <= 1'b1;
-	              tape_addr <= execPoint; 
-		    end
+
+		            if (fileType=='h4D)        // Machine Code
+                        begin
+                            state <=  SM_EXECPOINTLO;
+                        end
+		            else
+		                begin
+                            state <= SM_COMPLETED; 
+                            tape_complete <= 1'b1;
+	                        tape_addr <= execPoint; 
+		                end
                 end
 
                 SM_COMPLETED:
                 begin
-		    tape_wr <= 'b0;  
+		            tape_wr <= 'b0;  
                     tape_complete <= 1'b0;
-		    state <= SM_INIT;
+		            state <= SM_INIT;
                 end
 
             endcase

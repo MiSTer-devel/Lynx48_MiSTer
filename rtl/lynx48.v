@@ -21,7 +21,7 @@ module lynx48
 	output wire [15:0]audio,
 	input  wire      ear,
 	
-	input wire    	 autostart_basic,
+	input wire  autostart_basic,
 
 	// roms, cartridges, etc
 	input	wire [7:0]	ioctl_data,
@@ -36,7 +36,7 @@ module lynx48
    	input  wire [7:0] joy_1,
 	
 	// 
-	input  wire [1:0] mode //0: lynx48k, 1: lynx96k, 2: lynx96k with scorpio rom
+	input  wire [1:0] mode //0: lynx48k, 1: lynx96k, 2: lynx96k with scorpio rom, 3: lynx128k
 );
 
 
@@ -144,31 +144,41 @@ end
 wire[ 7:0] romDo_48;
 wire[ 7:0] romDo_96;
 wire[ 7:0] romDo_96s;
-wire[14:0] romA;
+wire[ 7:0] romDo_128;
+wire[16:0] romA;
 
 rom #(.AW(14), .FN("48K-1+2.hex")) Rom_48
 (
-	.clock  (clock  ),
-	.ce     (ce400p   ),
-	.data_out     (romDo_48),
-	.a      (romA[13:0]   )
+	.clock  	(clock  	),
+	.ce     	(ce400p   	),
+	.data_out	(romDo_48	),
+	.a      	(romA[13:0] )
 );
 
 rom #(.AW(15), .FN("96K-1+2+3.hex")) Rom_96
 (
-	.clock  (clock  ),
-	.ce     (ce400p   ),
-	.data_out(romDo_96),
-	.a      (romA   )
+	.clock  	(clock  	),
+	.ce     	(ce400p   	),
+	.data_out	(romDo_96	),
+	.a      	(romA   	)
 );
 
 rom #(.AW(15), .FN("96K-1+2+3s.hex")) Rom_96s
 (
-	.clock  (clock  ),
-	.ce     (ce400p   ),
-	.data_out(romDo_96s),
-	.a      (romA   )
+	.clock  	(clock  	),
+	.ce     	(ce400p   	),
+	.data_out	(romDo_96s	),
+	.a      	(romA   	)
 );
+
+rom #(.AW(16), .FN("128k-1+2+3.hex")) Rom_128
+(
+	.clock  	(clock  	),
+	.ce     	(ce400p   	),
+	.data_out	(romDo_128	),
+	.a      	(romA   	)
+);
+
 
 wire[ 7:0] ramDi;
 wire[ 7:0] ramDo;
@@ -178,14 +188,14 @@ wire ramWe;
 
 bram #(.widthad_a(16)) Ram
 (
-    .clock_a  	(clock  ),
-    .enable_a 	(ce400p  ),
-    .wren_a   	(~ramWe  ),
-    .data_a   	(ramDi  ),
-    .q_a     	(ramDo  ),
-    .address_a	(ramA  ),
+    .clock_a  	(clock  	),
+    .enable_a 	(ce400p  	),
+    .wren_a   	(~ramWe  	),
+    .data_a   	(ramDi  	),
+    .q_a     	(ramDo  	),
+    .address_a	(ramA  		),
 
-    .clock_b  	 (clock  	),
+    .clock_b  	(clock  	),
     .enable_b   (1			),
     .wren_b     (tape_wr	),
     .data_b     (tape_dout	),
@@ -342,7 +352,7 @@ audio Audio
 
 //-------------------------------------------------------------------------------------------------
 
-assign romA = (mode != 2'b00 ? a[14:0] : a[13:0]);
+assign romA = (mode != 2'b00 ? a[16:0] : a[13:0]);
 
 assign ramWe = !(!mreq && !wr && !reg7F[0]);
 assign ramDi = data_out;
