@@ -75,7 +75,7 @@ wire reset = reset_osd && reset_kbd;
 
 wire[ 7:0] di;
 wire[ 7:0] data_out;
-wire[15:0] a;
+wire[16:0] a;
 wire mreq;
 wire iorq;
 wire wr;

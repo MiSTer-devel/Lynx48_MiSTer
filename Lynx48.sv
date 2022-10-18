@@ -49,6 +49,7 @@ module emu
 	output        VGA_F1,
 	output [1:0]  VGA_SL,
 	output        VGA_SCALER, // Force VGA scaler
+	output        VGA_DISABLE, // analog out is off
 
 	input  [11:0] HDMI_WIDTH,
 	input  [11:0] HDMI_HEIGHT,
@@ -199,36 +200,36 @@ assign VIDEO_ARY = status[5] ? 8'd9  : 8'd3;
 localparam CONF_STR = {
 	"Lynx48;;",
 	"-;",
-	"F1,TAP,Load Cassette;",
+	"F[1],TAP,Load Cassette;",
 	"-;",
-	"O5,Aspect ratio,4:3,16:9;",
-	"O12,Scandoubler Fx,None,HQ2x,CRT 25%,CRT 50%;",
+	"O[5],Aspect ratio,4:3,16:9;",
+	"O[2:1],Scandoubler Fx,None,HQ2x,CRT 25%,CRT 50%;",
 	"-;",
-	"O34,Machine,Lynx 48K,Lynx 96k,96k Scorpion,Lynx 128k;",
-	"O6,BASIC Autostart,On,Off;",	
+	"O[4:3],Machine,Lynx 48K,Lynx 96k,96k Scorpion,Lynx 128k;",
+	"O[6],BASIC Autostart,On,Off;",	
 	"-;",
 	"OD,Joysticks Swap,No,Yes;",
 	"-;",	
-	"T0,Reset;",	
-	"R0,Reset and close OSD;",
+	"T[0],Reset;",	
+	"R[0],Reset and close OSD;",
 	"J,Button;",
 	"jn,A;",
 	"V,v",`BUILD_DATE 
 };
 
-wire forced_scandoubler;
-wire [ 1:0] buttons;
-wire [31:0] status;
-wire [ 1:0] mode = status[4:3];
-wire [ 1:0] old_mode;
+wire 		 forced_scandoubler;
+wire   [1:0] buttons;
+wire [127:0] status;
+wire   [1:0] mode = status[4:3];
+wire   [1:0] old_mode;
 
-wire        ioctl_download;
-wire  [7:0] ioctl_index;
-wire        ioctl_wr;
-wire [24:0] ioctl_addr;
-wire  [7:0] ioctl_data;
+wire         ioctl_download;
+wire   [7:0] ioctl_index;
+wire         ioctl_wr;
+wire  [24:0] ioctl_addr;
+wire   [7:0] ioctl_data;
 
-wire [21:0] gamma_bus;
+wire  [21:0] gamma_bus;
 
 //Keyboard Ps2
 
