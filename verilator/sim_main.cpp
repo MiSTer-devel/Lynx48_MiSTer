@@ -1,480 +1,307 @@
-#include <verilated.h>
-#include "Vemu.h"
+// Headless Verilator simulator for the Camputers Lynx core (rtl/lynx_core.sv).
+// Runs at the hardware clk_sys rate (48 MHz) with the hardware clock enables.
+//
+//   ./obj_dir/Vlynx_sim --model 48 --frames 150 --shots 150 --outdir out
+//   ./obj_dir/Vlynx_sim --model 96 --type 'PRINT 2+2\n@120' --frames 200 --shots 200
+//
+// Frames are PNG files, OUTDIR/frame_NNNNN.png, the active picture only.
+#include "Vlynx_sim.h"
+#include "verilated.h"
+#include <zlib.h>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <algorithm>
+#include <map>
+#include <set>
+#include <string>
+#include <vector>
+#include <sys/stat.h>
 
-#include "imgui.h"
-#include "implot.h"
-#ifndef _MSC_VER
-#include <stdio.h>
-#include <SDL.h>
-#include <SDL_opengl.h>
-#else
-#define WIN32
-#include <dinput.h>
-#endif
+static Vlynx_sim* top;
+static uint64_t cycles = 0;
+static const uint64_t CLK_HZ = 48000000;
 
-#include "sim_console.h"
-#include "sim_bus.h"
-#include "sim_video.h"
-#include "sim_audio.h"
-#include "sim_input.h"
-#include "sim_clock.h"
+static int model = 0, run_frames = 100, every = 0;
+static std::set<int> shots;
+static std::string outdir = "out", rom_path, rom128_path, wav_path, tape_path;
+static std::vector<uint8_t> tape_img;
+static bool tape_log = false, no_overlay = false;
+static int ack_delay = 0;
+static bool turbo = false, quiet = false, pc_trace = false;
+static std::map<int, std::pair<uint32_t, uint32_t>> dumps;
 
-#include "../imgui/imgui_memory_editor.h"
-#include "../imgui/ImGuiFileDialog.h"
-
-#include <iostream>
-#include <fstream>
-using namespace std;
-
-// Simulation control
-// ------------------
-int initialReset = 48;
-bool run_enable = 1;
-int batchSize = 150000;
-bool single_step = 0;
-bool multi_step = 0;
-int multi_step_amount = 1024;
-
-// Debug GUI 
-// ---------
-const char* windowTitle = "Verilator Sim: Aznable";
-const char* windowTitle_Control = "Simulation control";
-const char* windowTitle_DebugLog = "Debug log";
-const char* windowTitle_Video = "VGA output";
-const char* windowTitle_Audio = "Audio output";
-bool showDebugLog = true;
-DebugConsole console;
-MemoryEditor mem_edit;
-
-// HPS emulator
-// ------------
-SimBus bus(console);
-
-// Input handling
-// --------------
-SimInput input(13, console);
-const int input_right = 0;
-const int input_left = 1;
-const int input_down = 2;
-const int input_up = 3;
-const int input_a = 4;
-const int input_b = 5;
-const int input_x = 6;
-const int input_y = 7;
-const int input_l = 8;
-const int input_r = 9;
-const int input_select = 10;
-const int input_start = 11;
-const int input_menu = 12;
-
-// Video
-// -----
-#define VGA_WIDTH 320
-#define VGA_HEIGHT 240
-#define VGA_ROTATE 0  // 90 degrees anti-clockwise
-#define VGA_SCALE_X vga_scale
-#define VGA_SCALE_Y vga_scale
-SimVideo video(VGA_WIDTH, VGA_HEIGHT, VGA_ROTATE);
-float vga_scale = 2.5;
-
-// Verilog module
-// --------------
-Vemu* top = NULL;
-
-vluint64_t main_time = 0;	// Current simulation time.
-double sc_time_stamp() {	// Called by $time in Verilog.
-	return main_time;
+// ---------------------------------------------------------------- PNG
+static void put32(std::vector<uint8_t>& v, uint32_t x) {
+  v.push_back(x >> 24); v.push_back(x >> 16); v.push_back(x >> 8); v.push_back(x);
+}
+static void chunk(FILE* f, const char* type, const std::vector<uint8_t>& data) {
+  std::vector<uint8_t> b; put32(b, data.size());
+  b.insert(b.end(), type, type + 4); b.insert(b.end(), data.begin(), data.end());
+  uint32_t crc = crc32(0, b.data() + 4, b.size() - 4);
+  put32(b, crc); fwrite(b.data(), 1, b.size(), f);
+}
+static bool write_png(const std::string& path, int w, int h, const std::vector<uint8_t>& rgb, int stride) {
+  FILE* f = fopen(path.c_str(), "wb"); if (!f) return false;
+  static const uint8_t sig[8] = {137, 80, 78, 71, 13, 10, 26, 10}; fwrite(sig, 1, 8, f);
+  std::vector<uint8_t> ihdr; put32(ihdr, w); put32(ihdr, h);
+  ihdr.push_back(8); ihdr.push_back(2); ihdr.push_back(0); ihdr.push_back(0); ihdr.push_back(0);
+  chunk(f, "IHDR", ihdr);
+  std::vector<uint8_t> raw; raw.reserve((w * 3 + 1) * h);
+  for (int y = 0; y < h; y++) { raw.push_back(0); raw.insert(raw.end(), &rgb[y * stride * 3], &rgb[y * stride * 3] + w * 3); }
+  uLongf zl = compressBound(raw.size()); std::vector<uint8_t> z(zl);
+  compress2(z.data(), &zl, raw.data(), raw.size(), 6); z.resize(zl);
+  chunk(f, "IDAT", z); chunk(f, "IEND", {}); fclose(f); return true;
 }
 
-int clk_sys_freq = 24000000;
-SimClock clk_sys(1);
+// ---------------------------------------------------------------- video capture
+static const int FB_W = 1024, FB_H = 400;
+static std::vector<uint8_t> fb(FB_W * FB_H * 3);
+static int vx = 0, vy = 0, max_x = 0, frame = 0, last_w = 0, last_h = 0;
+static bool prev_hb = true, prev_vs = false, line_px = false;
 
-// Audio
-// -----
-//#define DISABLE_AUDIO
-#ifndef DISABLE_AUDIO
-SimAudio audio(clk_sys_freq, false);
-#endif
-
-// Reset simulation variables and clocks
-void resetSim() {
-	main_time = 0;
-	top->reset = 1;
-	clk_sys.Reset();
-}
-
-int verilate() {
-
-	if (!Verilated::gotFinish()) {
-
-		// Assert reset during startup
-		if (main_time < initialReset) { top->reset = 1; }
-		// Deassert reset after startup
-		if (main_time == initialReset) { top->reset = 0; }
-
-		// Clock dividers
-		clk_sys.Tick();
-
-		// Set system clock in core
-		top->clk_sys = clk_sys.clk;
-
-		// Simulate both edges of system clock
-		if (clk_sys.clk != clk_sys.old) {
-			if (clk_sys.clk) {
-				input.BeforeEval();
-				bus.BeforeEval();
-			}
-			top->eval();
-			if (clk_sys.clk) { bus.AfterEval(); }
-		}
-
-#ifndef DISABLE_AUDIO
-		if (clk_sys.IsRising())
-		{
-			audio.Clock(top->AUDIO_L, top->AUDIO_R);
-		}
-#endif
-
-		// Output pixels on rising edge of pixel clock
-		if (clk_sys.IsRising() && top->CE_PIXEL ) {
-			uint32_t colour = 0xFF000000 | top->VGA_B << 16 | top->VGA_G << 8 | top->VGA_R;
-			video.Clock(top->VGA_HB, top->VGA_VB, top->VGA_HS, top->VGA_VS, colour);
-		}
-
-		if (clk_sys.IsRising()) {
-			main_time++;
-		}
-		return 1;
-	}
-
-	// Stop verilating and cleanup
-	top->final();
-	delete top;
-	exit(0);
-	return 0;
-}
-
-unsigned char mouse_clock = 0;
-unsigned char mouse_clock_reduce = 0;
-unsigned char mouse_buttons = 0;
-unsigned char mouse_x = 0;
-unsigned char mouse_y = 0;
-
-char spinner_toggle = 0;
-
-int main(int argc, char** argv, char** env) {
-
-	// Create core and initialise
-	top = new Vemu();
-	Verilated::commandArgs(argc, argv);
-
-#ifdef WIN32
-	// Attach debug console to the verilated code
-	Verilated::setDebug(console);
-#endif
-
-	// Attach bus
-	bus.ioctl_addr = &top->ioctl_addr;
-	bus.ioctl_index = &top->ioctl_index;
-	bus.ioctl_wait = &top->ioctl_wait;
-	bus.ioctl_download = &top->ioctl_download;
-	//bus.ioctl_upload = &top->ioctl_upload;
-	bus.ioctl_wr = &top->ioctl_wr;
-	bus.ioctl_dout = &top->ioctl_dout;
-	//bus.ioctl_din = &top->ioctl_din;
-	input.ps2_key = &top->ps2_key;
-
-#ifndef DISABLE_AUDIO
-	audio.Initialise();
-#endif
-
-	// Set up input module
-	input.Initialise();
-#ifdef WIN32
-	input.SetMapping(input_up, DIK_UP);
-	input.SetMapping(input_right, DIK_RIGHT);
-	input.SetMapping(input_down, DIK_DOWN);
-	input.SetMapping(input_left, DIK_LEFT);
-	input.SetMapping(input_a, DIK_Z); // A
-	input.SetMapping(input_b, DIK_X); // B
-	input.SetMapping(input_x, DIK_A); // X
-
-	input.SetMapping(input_y, DIK_S); // Y
-	input.SetMapping(input_l, DIK_Q); // L
-	input.SetMapping(input_r, DIK_W); // R
-	input.SetMapping(input_select, DIK_1); // Select
-	input.SetMapping(input_start, DIK_2); // Start
-	input.SetMapping(input_menu, DIK_M); // System menu trigger
-
-#else
-	input.SetMapping(input_up, SDL_SCANCODE_UP);
-	input.SetMapping(input_right, SDL_SCANCODE_RIGHT);
-	input.SetMapping(input_down, SDL_SCANCODE_DOWN);
-	input.SetMapping(input_left, SDL_SCANCODE_LEFT);
-	input.SetMapping(input_a, SDL_SCANCODE_A);
-	input.SetMapping(input_b, SDL_SCANCODE_B);
-	input.SetMapping(input_x, SDL_SCANCODE_X);
-	input.SetMapping(input_y, SDL_SCANCODE_Y);
-	input.SetMapping(input_l, SDL_SCANCODE_L);
-	input.SetMapping(input_r, SDL_SCANCODE_E);
-	input.SetMapping(input_start, SDL_SCANCODE_1);
-	input.SetMapping(input_select, SDL_SCANCODE_2);
-	input.SetMapping(input_menu, SDL_SCANCODE_M);
-#endif
-	// Setup video output
-	if (video.Initialise(windowTitle) == 1) { return 1; }
-
-	//bus.QueueDownload("zombie.tap",1,0);
-
-#ifdef WIN32
-	MSG msg;
-	ZeroMemory(&msg, sizeof(msg));
-	while (msg.message != WM_QUIT)
-	{
-		if (PeekMessage(&msg, NULL, 0U, 0U, PM_REMOVE))
-		{
-			TranslateMessage(&msg);
-			DispatchMessage(&msg);
-			continue;
-		}
-#else
-	bool done = false;
-	while (!done)
-	{
-		SDL_Event event;
-		while (SDL_PollEvent(&event))
-		{
-			ImGui_ImplSDL2_ProcessEvent(&event);
-			if (event.type == SDL_QUIT)
-				done = true;
-		}
-#endif
-		video.StartFrame();
-
-		input.Read();
-
-
-		// Draw GUI
-		// --------
-		ImGui::NewFrame();
-
-		// Simulation control window
-		ImGui::Begin(windowTitle_Control);
-		ImGui::SetWindowPos(windowTitle_Control, ImVec2(0, 0), ImGuiCond_Once);
-		ImGui::SetWindowSize(windowTitle_Control, ImVec2(500, 150), ImGuiCond_Once);
-		if (ImGui::Button("Reset simulation")) { resetSim(); } ImGui::SameLine();
-		if (ImGui::Button("Start running")) { run_enable = 1; } ImGui::SameLine();
-		if (ImGui::Button("Stop running")) { run_enable = 0; } ImGui::SameLine();
-		ImGui::Checkbox("RUN", &run_enable);
-		//ImGui::PopItemWidth();
-		ImGui::SliderInt("Run batch size", &batchSize, 1, 250000);
-		if (single_step == 1) { single_step = 0; }
-		if (ImGui::Button("Single Step")) { run_enable = 0; single_step = 1; }
-		ImGui::SameLine();
-		if (multi_step == 1) { multi_step = 0; }
-		if (ImGui::Button("Multi Step")) { run_enable = 0; multi_step = 1; }
-		//ImGui::SameLine();
-		ImGui::SliderInt("Multi step amount", &multi_step_amount, 8, 1024);
-if (ImGui::Button("Load Tape"))
-    ImGuiFileDialog::Instance()->OpenDialog("ChooseFileDlgKey", "Choose File", ".tap", ".");
-
-		ImGui::End();
-
-		// Debug log window
-		console.Draw(windowTitle_DebugLog, &showDebugLog, ImVec2(500, 700));
-		ImGui::SetWindowPos(windowTitle_DebugLog, ImVec2(0, 160), ImGuiCond_Once);
-
-		// Memory debug
-		//ImGui::Begin("PGROM Editor");
-		//mem_edit.DrawContents(top->emu__DOT__system__DOT__pgrom__DOT__mem, 32768, 0);
-		//ImGui::End();
-		//ImGui::Begin("CHROM Editor");
-		//mem_edit.DrawContents(top->emu__DOT__system__DOT__chrom__DOT__mem, 2048, 0);
-		//ImGui::End();
-		//ImGui::Begin("WKRAM Editor");
-		//mem_edit.DrawContents(&top->emu__DOT__system__DOT__wkram__DOT__mem, 16384, 0);
-		//ImGui::End();
-		//ImGui::Begin("CHRAM Editor");
-		//mem_edit.DrawContents(&top->emu__DOT__system__DOT__chram__DOT__mem, 2048, 0);
-		//ImGui::End();
-		//ImGui::Begin("FGCOLRAM Editor");
-		//mem_edit.DrawContents(&top->emu__DOT__system__DOT__fgcolram__DOT__mem, 2048, 0);
-		//ImGui::End();
-		//ImGui::Begin("BGCOLRAM Editor");
-		//mem_edit.DrawContents(&top->emu__DOT__system__DOT__bgcolram__DOT__mem, 2048, 0);
-		//ImGui::End();
-		//ImGui::Begin("Sprite RAM");
-		//mem_edit.DrawContents(&top->emu__DOT__system__DOT__spriteram__DOT__mem, 96, 0);
-		//ImGui::End();
-		//ImGui::Begin("Sprite Linebuffer RAM");
-		//mem_edit.DrawContents(&top->emu__DOT__system__DOT__spritelbram__DOT__mem, 1024, 0);
-		//ImGui::End();
-		//ImGui::Begin("Sprite Collision Buffer RAM A");
-		//mem_edit.DrawContents(&top->emu__DOT__system__DOT__comet__DOT__spritecollisionbufferram_a__DOT__mem, 512, 0);
-		//ImGui::End();
-		//ImGui::Begin("Sprite Collision Buffer RAM B");
-		//mem_edit.DrawContents(&top->emu__DOT__system__DOT__comet__DOT__spritecollisionbufferram_b__DOT__mem, 512, 0);
-		//ImGui::End();
-		//ImGui::Begin("Sprite Collision RAM ");
-		//mem_edit.DrawContents(&top->emu__DOT__system__DOT__spritecollisionram__DOT__mem, 32, 0);
-		//ImGui::End();
-		//ImGui::Begin("Sprite Debug RAM");
-		//mem_edit.DrawContents(&top->emu__DOT__system__DOT__spritedebugram__DOT__mem, 128000, 0);
-		//ImGui::End();
-		//ImGui::Begin("Palette ROM");
-		//mem_edit.DrawContents(&top->emu__DOT__system__DOT__palrom__DOT__mem, 64, 0);
-		//ImGui::End();
-		//ImGui::Begin("Sprite ROM");
-		//mem_edit.DrawContents(&top->emu__DOT__system__DOT__spriterom__DOT__mem, 2048, 0);
-		//ImGui::End();
-		//ImGui::Begin("Tilemap ROM");
-		//mem_edit.DrawContents(&top->emu__DOT__system__DOT__tilemaprom__DOT__mem, 8192, 0);
-		//ImGui::End();
-		//ImGui::Begin("Tilemap RAM");
-		//	mem_edit.DrawContents(&top->emu__DOT__system__DOT__tilemapram__DOT__mem, 768, 0);
-		//ImGui::End();
-		//ImGui::Begin("Sound ROM");
-		//mem_edit.DrawContents(&top->emu__DOT__system__DOT__soundrom__DOT__mem, 64000, 0);
-		//ImGui::End();
-
-		int windowX = 550;
-		int windowWidth = (VGA_WIDTH * VGA_SCALE_X) + 24;
-		int windowHeight = (VGA_HEIGHT * VGA_SCALE_Y) + 90;
-
-		// Video window
-		ImGui::Begin(windowTitle_Video);
-		ImGui::SetWindowPos(windowTitle_Video, ImVec2(windowX, 0), ImGuiCond_Once);
-		ImGui::SetWindowSize(windowTitle_Video, ImVec2(windowWidth, windowHeight), ImGuiCond_Once);
-
-		ImGui::SliderFloat("Zoom", &vga_scale, 1, 8); ImGui::SameLine();
-		ImGui::SliderInt("Rotate", &video.output_rotate, -1, 1); ImGui::SameLine();
-		ImGui::Checkbox("Flip V", &video.output_vflip);
-		ImGui::Text("main_time: %d frame_count: %d sim FPS: %f", main_time, video.count_frame, video.stats_fps);
-		//ImGui::Text("pixel: %06d line: %03d", video.count_pixel, video.count_line);
-
-		// Draw VGA output
-		ImGui::Image(video.texture_id, ImVec2(video.output_width * VGA_SCALE_X, video.output_height * VGA_SCALE_Y));
-		ImGui::End();
-
-  if (ImGuiFileDialog::Instance()->Display("ChooseFileDlgKey"))
-  {
-    // action if OK
-    if (ImGuiFileDialog::Instance()->IsOk())
-    {
-      std::string filePathName = ImGuiFileDialog::Instance()->GetFilePathName();
-      std::string filePath = ImGuiFileDialog::Instance()->GetCurrentPath();
-      // action
-fprintf(stderr,"filePathName: %s\n",filePathName.c_str());
-fprintf(stderr,"filePath: %s\n",filePath.c_str());
-     bus.QueueDownload(filePathName, 1,0);
+static void video_step() {
+  if (!top->ce_pix) return;
+  bool active = !top->HBlank && !top->VBlank;
+  if (active) {
+    if (vx < FB_W && vy < FB_H) {
+      uint8_t* p = &fb[(vy * FB_W + vx) * 3];
+      p[0] = top->rgb >> 16; p[1] = top->rgb >> 8; p[2] = top->rgb;
     }
-   
-    // close
-    ImGuiFileDialog::Instance()->Close();
+    vx++; line_px = true;
   }
+  if (top->HBlank && !prev_hb) {           // end of a line
+    if (line_px) { if (vx > max_x) max_x = vx; vy++; }
+    vx = 0; line_px = false;
+  }
+  prev_hb = top->HBlank;
+}
 
+// ---------------------------------------------------------------- keyboard (PS/2 set 2 into matrix.v)
+// The Lynx keyboard is used positionally: a PC key gives the Lynx key in the same place
+// (rtl/matrix.v). Characters are typed with the Lynx's shift states (MAME camplynx.cpp).
+struct PS2 { uint8_t code; bool ext, press; };
+struct Sched { int frame; PS2 ev; };
+static std::vector<Sched> sched;
+static int ps2_toggle = 0;
 
-#ifndef DISABLE_AUDIO
+static bool char_code(char c, uint8_t& code, bool& shift) {
+  static const uint8_t lc[26] = {0x1C,0x32,0x21,0x23,0x24,0x2B,0x34,0x33,0x43,0x3B,0x42,0x4B,0x3A,
+                                 0x31,0x44,0x4D,0x15,0x2D,0x1B,0x2C,0x3C,0x2A,0x1D,0x22,0x35,0x1A};
+  static const uint8_t dc[10] = {0x45,0x16,0x1E,0x26,0x25,0x2E,0x36,0x3D,0x3E,0x46};
+  shift = false;
+  if (c >= 'A' && c <= 'Z') { code = lc[c - 'A']; return true; }            // unshifted = capitals
+  if (c >= 'a' && c <= 'z') { code = lc[c - 'a']; shift = true; return true; }
+  if (c >= '0' && c <= '9') { code = dc[c - '0']; return true; }
+  // Lynx shifted digits: 1 ! 2 " 3 # 4 $ 5 % 6 & 7 ' 8 ( 9 ) 0 _
+  const char* sh = "_!\"#$%&'()";
+  if (const char* p = strchr(sh, c)) { if (c) { code = dc[p - sh]; shift = true; return true; } }
+  switch (c) {
+    case ' ':  code = 0x29; return true;
+    case '\n': code = 0x5A; return true;
+    case ':':  code = 0x52; return true;  case '*': code = 0x52; shift = true; return true;
+    case ';':  code = 0x4C; return true;  case '+': code = 0x4C; shift = true; return true;
+    case ',':  code = 0x41; return true;  case '<': code = 0x41; shift = true; return true;
+    case '.':  code = 0x49; return true;  case '>': code = 0x49; shift = true; return true;
+    case '/':  code = 0x4A; return true;  case '?': code = 0x4A; shift = true; return true;
+    case '-':  code = 0x4E; return true;  case '=': code = 0x4E; shift = true; return true;
+    case '@':  code = 0x55; return true;  case '\\': code = 0x55; shift = true; return true;
+    case '[':  code = 0x54; return true;  case '^': code = 0x54; shift = true; return true;
+    case ']':  code = 0x5B; return true;
+  }
+  return false;
+}
 
-		ImGui::Begin(windowTitle_Audio);
-		ImGui::SetWindowPos(windowTitle_Audio, ImVec2(windowX, windowHeight), ImGuiCond_Once);
-		ImGui::SetWindowSize(windowTitle_Audio, ImVec2(windowWidth, 250), ImGuiCond_Once);
+// a key goes down, stays down 3 frames, up, then 2 frames gap
+static void schedule_text(int f, const std::string& t) {
+  for (size_t i = 0; i < t.size(); i++) {
+    char c = t[i];
+    if (c == '\\' && i + 1 < t.size() && t[i + 1] == 'n') { c = '\n'; i++; }
+    if (c == '\\' && i + 1 < t.size() && t[i + 1] == 'e') {          // \e: ESC
+      i++; sched.push_back({f, {0x76, false, true}}); sched.push_back({f + 4, {0x76, false, false}}); f += 6; continue; }
+    uint8_t code; bool shift;
+    if (!char_code(c, code, shift)) { fprintf(stderr, "cannot type '%c'\n", c); continue; }
+    if (shift) sched.push_back({f, {0x12, false, true}});
+    sched.push_back({f + (shift ? 1 : 0), {code, false, true}});
+    sched.push_back({f + 4, {code, false, false}});
+    if (shift) sched.push_back({f + 4, {0x12, false, false}});
+    f += c == '\n' ? 30 : 6;   // BASIC is busy for a while after Return
+  }
+}
 
-		
-		//float vol_l = ((signed short)(top->AUDIO_L) / 256.0f) / 256.0f;
-		//float vol_r = ((signed short)(top->AUDIO_R) / 256.0f) / 256.0f;
-		//ImGui::ProgressBar(vol_l + 0.5f, ImVec2(200, 16), 0); ImGui::SameLine();
-		//ImGui::ProgressBar(vol_r + 0.5f, ImVec2(200, 16), 0);
+static void key_event(const PS2& e) {
+  ps2_toggle ^= 1;
+  top->ps2_key = (ps2_toggle << 10) | (e.press << 9) | (e.ext << 8) | e.code;
+}
 
-		int ticksPerSec = (24000000 / 60);
-		if (run_enable) {
-			audio.CollectDebug((signed short)top->AUDIO_L, (signed short)top->AUDIO_R);
-		}
-		int channelWidth = (windowWidth / 2)  -16;
-		ImPlot::CreateContext();
-		if (ImPlot::BeginPlot("Audio - L", ImVec2(channelWidth, 220), ImPlotFlags_NoLegend | ImPlotFlags_NoMenus | ImPlotFlags_NoTitle)) {
-			ImPlot::SetupAxes("T", "A", ImPlotAxisFlags_NoLabel | ImPlotAxisFlags_NoTickMarks, ImPlotAxisFlags_AutoFit | ImPlotAxisFlags_NoLabel | ImPlotAxisFlags_NoTickMarks);
-			ImPlot::SetupAxesLimits(0, 1, -1, 1, ImPlotCond_Once);
-			ImPlot::PlotStairs("", audio.debug_positions, audio.debug_wave_l, audio.debug_max_samples, audio.debug_pos);
-			ImPlot::EndPlot();
-		}
-		ImGui::SameLine();
-		if (ImPlot::BeginPlot("Audio - R", ImVec2(channelWidth, 220), ImPlotFlags_NoLegend | ImPlotFlags_NoMenus | ImPlotFlags_NoTitle)) {
-			ImPlot::SetupAxes("T", "A", ImPlotAxisFlags_NoLabel | ImPlotAxisFlags_NoTickMarks, ImPlotAxisFlags_AutoFit | ImPlotAxisFlags_NoLabel | ImPlotAxisFlags_NoTickMarks);
-			ImPlot::SetupAxesLimits(0, 1, -1, 1, ImPlotCond_Once);
-			ImPlot::PlotStairs("", audio.debug_positions, audio.debug_wave_r, audio.debug_max_samples, audio.debug_pos);
-			ImPlot::EndPlot();
-		}
-		ImPlot::DestroyContext();
-		ImGui::End();
-#endif
+// ---------------------------------------------------------------- helpers
+static std::vector<uint8_t> read_file(const std::string& p) {
+  std::vector<uint8_t> d; FILE* f = fopen(p.c_str(), "rb");
+  if (!f) { fprintf(stderr, "cannot open %s\n", p.c_str()); exit(1); }
+  fseek(f, 0, SEEK_END); d.resize(ftell(f)); fseek(f, 0, SEEK_SET);
+  if (fread(d.data(), 1, d.size(), f) != d.size()) { fprintf(stderr, "short read %s\n", p.c_str()); exit(1); }
+  fclose(f); return d;
+}
 
-		video.UpdateTexture();
+static void tick() {
+  top->clk = 0; top->eval();
+  top->clk = 1; top->eval();
+  cycles++;
+}
 
+static void download_rom(const std::vector<uint8_t>& d, bool sel128) {
+  top->rom_sel128 = sel128;
+  for (size_t i = 0; i < d.size() && i < (sel128 ? 32768u : 65536u); i++) {
+    top->rom_addr = i; top->rom_data = d[i]; top->rom_wr = 1; tick();
+    top->rom_wr = 0; tick();
+  }
+}
 
-		// Pass inputs to sim
+// audio: 6-bit DAC sampled at 48 kHz
+static FILE* wav = nullptr; static uint32_t wav_n = 0;
+static void wav_hdr(FILE* f, uint32_t n) {
+  auto w32 = [&](uint32_t x) { fwrite(&x, 4, 1, f); }; auto w16 = [&](uint16_t x) { fwrite(&x, 2, 1, f); };
+  fwrite("RIFF", 1, 4, f); w32(36 + n * 2); fwrite("WAVEfmt ", 1, 8, f); w32(16); w16(1); w16(1);
+  w32(48000); w32(96000); w16(2); w16(16); fwrite("data", 1, 4, f); w32(n * 2);
+}
 
-		top->menu = input.inputs[input_menu];
+static void usage() {
+  printf("Vlynx_sim options:\n"
+         "  --model 48|96|96s|128   machine (default 48)\n"
+         "  --frames N              frames to run (default 100)\n"
+         "  --shots A,B,..          save frames A, B .. as PNG\n"
+         "  --every N               save every Nth frame\n"
+         "  --outdir DIR            output directory (default out)\n"
+         "  --type 'TEXT@FRAME'     type TEXT from FRAME (\\n = Return); repeatable\n"
+         "  --rom FILE              download FILE as boot.rom (index 0) before reset\n"
+         "  --rom128 FILE           download FILE as boot1.rom (index 40h)\n"
+         "  --tape FILE.tap         play a Lynx TAP through rtl/lynx_tap.sv (motor-driven)\n"
+         "  --tape-log              log motor changes and tape position\n"
+         "  --no-overlay            OSD Tape overlay Off\n"
+         "  --turbo                 CPU 4x\n"
+         "  --wav FILE              write the DAC as a 48 kHz WAV\n"
+         "  --disk FILE.LDF         mount a disk image (read only)\n"
+         "  --until-idle N          stop N frames after the tape motor last stopped (once it ran)\n"
+         "  --final FILE.PNG        save the last frame\n"
+         "  --quiet                 no per-frame log\n");
+}
 
-		top->joystick_0 = 0;
-		for (int i = 0; i < input.inputCount; i++)
-		{
-			if (input.inputs[i]) { top->joystick_0 |= (1 << i); }
-		}
-		top->joystick_1 = top->joystick_0;
+static std::string disk_path, final_png;
+static int until_idle = 0;
+static std::vector<uint8_t> disk_img;
+// SD block interface, as hps_io: ack, 512 bytes into the buffer, ack low
+static void sd_service() {
+  if (!top->sd_rd && !top->sd_wr) return;
+  bool rd = top->sd_rd; size_t off = (size_t)top->sd_lba * 512;
+  printf("frame %d: sd %s lba %u\n", frame, rd ? "read" : "write", top->sd_lba);
+  top->sd_ack = 1; tick(); tick();
+  for (int i = 0; i < 512 && rd; i++) {
+    top->sd_buff_addr = i; top->sd_buff_dout = off + i < disk_img.size() ? disk_img[off + i] : 0;
+    top->sd_buff_wr = 1; tick(); top->sd_buff_wr = 0; tick();
+  }
+  for (int i = 0; i < 1100 && !rd; i++) tick();
+  top->sd_ack = 0; tick(); tick();
+}
 
-		/*top->joystick_analog_0 += 1;
-		top->joystick_analog_0 -= 256;*/
-		//top->paddle_0 += 1;
-		//if (input.inputs[0] || input.inputs[1]) {
-		//	spinner_toggle = !spinner_toggle;
-		//	top->spinner_0 = (input.inputs[0]) ? 16 : -16;
-		//	for (char b = 8; b < 16; b++) {
-		//		top->spinner_0 &= ~(1UL << b);
-		//	}
-		//	if (spinner_toggle) { top->spinner_0 |= 1UL << 8; }
-		//}
+int main(int argc, char** argv) {
+  Verilated::commandArgs(argc, argv);
+  for (int i = 1; i < argc; i++) {
+    std::string a = argv[i];
+    auto next = [&]() -> std::string { if (i + 1 >= argc) { usage(); exit(1); } return argv[++i]; };
+    if (a == "--help" || a == "-h") { usage(); return 0; }
+    else if (a == "--model") {
+      std::string m = next();
+      model = m == "48" ? 0 : m == "96" ? 1 : m == "96s" ? 2 : m == "128" ? 3 : -1;
+      if (model < 0) { usage(); return 1; }
+    }
+    else if (a == "--frames") run_frames = atoi(next().c_str());
+    else if (a == "--every") every = atoi(next().c_str());
+    else if (a == "--shots") { std::string s = next(); char* p = &s[0];
+      for (char* t = strtok(p, ","); t; t = strtok(nullptr, ",")) shots.insert(atoi(t)); }
+    else if (a == "--outdir") outdir = next();
+    else if (a == "--type") { std::string s = next(); size_t at = s.rfind('@');
+      if (at == std::string::npos) { usage(); return 1; }
+      schedule_text(atoi(s.c_str() + at + 1), s.substr(0, at)); }
+    else if (a == "--rom") rom_path = next();
+    else if (a == "--rom128") rom128_path = next();
+    else if (a == "--turbo") turbo = true;
+    else if (a == "--tape") tape_path = next();
+    else if (a == "--tape-log") tape_log = true;
+    else if (a == "--no-overlay") no_overlay = true;
+    else if (a == "--wav") wav_path = next();
+    else if (a == "--disk") disk_path = next();
+    else if (a == "--until-idle") until_idle = atoi(next().c_str());
+    else if (a == "--final") final_png = next();
+    else if (a == "--quiet") quiet = true;
+    else if (a[0] == '+') {}
+    else { fprintf(stderr, "unknown option %s\n", a.c_str()); usage(); return 1; }
+  }
+  { std::string c = "mkdir -p '" + outdir + "'"; if (system(c.c_str())) {} }
 
-		mouse_buttons = 0;
-		mouse_x = 0;
-		mouse_y = 0;
-		if (input.inputs[input_left]) { mouse_x = -2; }
-		if (input.inputs[input_right]) { mouse_x = 2; }
-		if (input.inputs[input_up]) { mouse_y = 2; }
-		if (input.inputs[input_down]) { mouse_y = -2; }
+  top = new Vlynx_sim;
+  top->model = model; top->turbo = turbo; top->reset = 1;
+  top->joy0 = 0xFF; top->joy1 = 0xFF; top->tape_adc = 0; top->ps2_key = 0;
+  if (!tape_path.empty()) tape_img = read_file(tape_path);
+  top->tape_size = tape_img.size(); top->tape_ack = 0; top->tape_rewind = 1;
+  top->is_wav = tape_img.size() > 12 && !memcmp(tape_img.data(), "RIFF", 4);
+  for (int i = 0; i < 100; i++) tick();
+  if (!rom_path.empty()) download_rom(read_file(rom_path), false);
+  if (!rom128_path.empty()) download_rom(read_file(rom128_path), true);
+  for (int i = 0; i < 1000; i++) tick();
+  // the tape image through the download port, as hps_io sends it
+  top->overlay_on = !no_overlay;
+  top->dl_start = 1; tick(); top->dl_start = 0; top->dl_busy = 1;
+  for (uint8_t b : tape_img) { top->dl_data = b; top->dl_wr = 1; tick(); top->dl_wr = 0; tick(); }
+  top->dl_busy = 0; for (int i = 0; i < 20000; i++) tick();
+  top->reset = 0; top->tape_rewind = 0;
+  top->sd_ack = 0; top->sd_buff_wr = 0;
+  if (!disk_path.empty()) { disk_img = read_file(disk_path); top->img_size = disk_img.size();
+    top->img_mounted = 1; tick(); top->img_mounted = 0; }
 
-		if (input.inputs[input_a]) { mouse_buttons |= (1UL << 0); }
-		if (input.inputs[input_b]) { mouse_buttons |= (1UL << 1); }
+  if (!wav_path.empty()) { wav = fopen(wav_path.c_str(), "wb"); wav_hdr(wav, 0); }
+  uint64_t next_sample = 0;
+  size_t si = 0;
+  std::sort(sched.begin(), sched.end(), [](const Sched& a, const Sched& b) { return a.frame < b.frame; });
 
-		unsigned long mouse_temp = mouse_buttons;
-		mouse_temp += (mouse_x << 8);
-		mouse_temp += (mouse_y << 16);
-		if (mouse_clock) { mouse_temp |= (1UL << 24); }
-		mouse_clock = !mouse_clock;
-
-		top->ps2_mouse = mouse_temp;
-		top->ps2_mouse_ext = mouse_x + (mouse_buttons << 8);
-
-		// Run simulation
-		if (run_enable) {
-			for (int step = 0; step < batchSize; step++) { verilate(); }
-		}
-		else {
-			if (single_step) { verilate(); }
-			if (multi_step) {
-				for (int step = 0; step < multi_step_amount; step++) { verilate(); }
-			}
-		}
-	}
-
-	// Clean up before exit
-	// --------------------
-
-#ifndef DISABLE_AUDIO
-	audio.CleanUp();
-#endif 
-	video.CleanUp();
-	input.CleanUp();
-
-	return 0;
+  while (frame < run_frames) {
+    tick();
+    video_step();
+    sd_service();
+    { static int pd = -1, pr = -1; if (!disk_img.empty() && (top->dos_run != pd || top->disk_read != pr)) {
+        pd = top->dos_run; pr = top->disk_read;
+        printf("frame %d: disk %s, dos_run %d, disk_read %d\n", frame, top->disk_cpm ? "CP/M" : "Lynx DOS", pd, pr); } }
+    // tape image: answer a request a few clocks later (DDR3-like latency)
+    top->tape_ack = 0;
+    if (top->tape_req) { if (++ack_delay >= 8) { ack_delay = 0; top->tape_ack = 1;
+        top->tape_data = top->tape_addr < tape_img.size() ? tape_img[top->tape_addr] : 0; } }
+    else ack_delay = 0;
+    if (tape_log) { static int pm = -1; if (top->motor != pm) { pm = top->motor;
+        printf("frame %d: motor %s, TAPE %d (cf %04X), tape pos %u/%zu%s\n", frame, pm ? "on" : "off", top->tape_spd, top->dbg_cf, top->tape_pos, tape_img.size(),
+               top->tape_eot ? " (end)" : ""); } }
+    // one key event per 1000 clocks, so matrix.v sees each ps2_key toggle
+    if (si < sched.size() && sched[si].frame <= frame && cycles % 1000 == 0) key_event(sched[si++].ev);
+    if (wav && cycles >= next_sample) {
+      int16_t s = (int16_t)((top->sound << 9) - 16384); fwrite(&s, 2, 1, wav); wav_n++;
+      next_sample += CLK_HZ / 48000;
+    }
+    if (top->VSync && !prev_vs) {             // new frame
+      last_w = max_x; last_h = vy;
+      if (shots.count(frame) || (every && frame % every == 0)) {
+        char name[512]; snprintf(name, sizeof name, "%s/frame_%05d.png", outdir.c_str(), frame);
+        if (last_w > 0 && last_h > 0) write_png(name, std::min(last_w, FB_W), std::min(last_h, FB_H), fb, FB_W);
+      }
+      if (!quiet && frame % 25 == 0)
+        printf("frame %d  %dx%d  pc~%04X  motor %d  %.2f s\n", frame, last_w, last_h, top->dbg_a,
+               top->motor, cycles / (double)CLK_HZ);
+      frame++; vy = 0; max_x = 0;
+      { static int ran = 0, off_at = 0; if (top->motor) { ran = 1; off_at = frame; }
+        if (until_idle && ran && frame - off_at >= until_idle) run_frames = frame; }
+    }
+    prev_vs = top->VSync;
+  }
+  if (!final_png.empty() && last_w > 0) write_png(final_png.c_str(), std::min(last_w, FB_W), std::min(last_h, FB_H), fb, FB_W);
+  printf("done: %d frames, picture %dx%d, %.2f s emulated\n", frame, last_w, last_h, cycles / (double)CLK_HZ);
+  if (wav) { fseek(wav, 0, SEEK_SET); wav_hdr(wav, wav_n); fclose(wav); }
+  top->final(); delete top;
+  return 0;
 }

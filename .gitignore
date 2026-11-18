@@ -40,4 +40,4 @@ c5_pin_model_dump.txt
 **/.DS_Store
 verilator/.vs/*
 verilator/obj_dir/*
-verilator/x64/*
+verilator/x64/*verilator/out/
