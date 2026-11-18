@@ -20,7 +20,7 @@ a 6-bit DAC. About 30,000 were sold.
 | Tape | top | `.TAP` (Lynx), `.TZX` or `.WAV` tape image, played as a real tape signal |
 | Load ROM | top | Another `boot.rom` (see ROMs) for this session |
 | Model | Machine | Lynx 48K, Lynx 96K, 96K Scorpion, Lynx 128K |
-| CAS blanking | Machine | On (default): a colour plane is blanked while the CPU has its bank selected, as on the real machine; Level 9 adventures need it. Off: never blank (48K / 96K only) |
+| CAS blanking | Machine | On (default): a colour plane is blanked while its /CASEN bit switches it off; Level 9 adventures need it (whether a real Lynx shows black there isn't confirmed). Off: never blank (48K / 96K only) |
 | Tape speed | Machine | 4x (default): the CPU and the tape run 4 times faster while the tape motor is on; Normal |
 | Rewind tape | Machine | Back to the start of the tape |
 | Aspect ratio, Scale, Scandoubler Fx | Video | Original is the Lynx's real picture shape |
