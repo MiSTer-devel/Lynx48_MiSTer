@@ -1,60 +1,115 @@
-# Camputers Lynx MiSTer FPGA Core
+# Camputers Lynx for MiSTer
 
+The Camputers Lynx 48K, 96K (standard and Scorpion ROM) and 128K, a British Z80 home computer from 1983,
+on MiSTer. It runs from block RAM, so no SDRAM module is needed.
 
+## The Camputers Lynx
 
-## General description
+The Lynx was first released in early 1983 as a 48 KB model, designed by John Shireff; 96 KB and
+128 KB models followed. A Z80A ran at 4 MHz (6 MHz on the 128K) with a Motorola 6845 as video
+controller. The machine is always in an 8-colour bitmap mode (256 x 252 pixels on the 48K / 96K,
+512 x 252 on the 128K) and draws its 6 x 10 pixel text itself, so text and graphics are slow but
+look good. BASIC is large and pre-compiled, with graphics commands and inline machine code. Sound is
+a 6-bit DAC. About 30,000 were sold.
 
-This is a Lynx48 running on Mister FPGA. it was ported from zx-uno (https://github.com/Kyp069/lynx) by rampa069.  Simulation support added by JimmyStones and alanswx, Tape Loading through the OSD by JasonA.
+## OSD
 
-## The Camputers Lynx Home Computer
-The Lynx was an 8-bit British home computer that was first released in early 1983 as a 48 kB model. The designer of the Lynx was John Shireff and several models were available with 48 kB, 96 kB or 128 kB RAM. It was possible reach 192 kB with RAM expansions on-board.
+| Row | Page | |
+|---|---|---|
+| Disk | top | `.LDF` floppy image for the WD1793 disk interface (type `XROM` to start the disk system) |
+| Tape | top | `.TAP` (Lynx), `.TZX` or `.WAV` tape image, played as a real tape signal |
+| Load ROM | top | Another `boot.rom` (see ROMs) for this session |
+| Model | Machine | Lynx 48K, Lynx 96K, 96K Scorpion, Lynx 128K |
+| CAS blanking | Machine | On (default): a colour plane is blanked while the CPU has its bank selected, as on the real machine; Level 9 adventures need it. Off: never blank (48K / 96K only) |
+| Tape speed | Machine | 4x (default): the CPU and the tape run 4 times faster while the tape motor is on; Normal |
+| Rewind tape | Machine | Back to the start of the tape |
+| Aspect ratio, Scale, Scandoubler Fx | Video | Original is the Lynx's real picture shape |
+| Tape overlay | Video | On (default) / Off: the tape status bar and the tape / disk next-step hint |
+| Swap joysticks | Input | |
+| Tape audio | Audio | Hear the tape while it plays |
+| Invert tape in | Audio | Polarity of a `.WAV` or a real cassette on the line-in (ADC) input |
 
-The machine was based around a Z80A CPU clocked at 4 MHz, (6 MHz for the 128/192 kB models) and featured a Motorola 6845 as video controller. 
-The machine was quite advanced for the time, but the high price (48 kB : £225, 96 kB : £299, 128k : £345) compared to its competitors, the Sinclair ZX Spectrum and the Oric 1, and lack of software was probably the reason for its short life. Approximately 30,000 Lynx units were sold worldwide.
+Model and CAS blanking take effect at **Apply and reset** ("Changes pending" shows that something
+is waiting). F9 resets the Lynx.
 
-Unique features of this computer (compared to other home computers at the time) includes: 
-A quite large Basic, including graphics commands, in line CODE sentence for inclusion of machine code in hex. Unlike most other computers interpreting from text, the lines were precompiled and stored in reverse polish binary format. 
-All numbers were floating point BCD numbers (even line numbers). 
-A monitor program allowed hex dumps, copy, compare etc. 
-The computer always ran in "high" resolution graphics mode (256x252 pixels in eight colours) using 6 times 10 pixels characters. Only a few bytes of graphic memory could be manipulated during the horisontal sync period, and thus graphics were extremely slow compared to most other computers; but better looking! 
-Up to 192 kB of RAM and 20 kB of ROM (16 kB on the smallest model) on a 16 bit address bus was implemented using special hardware. As a consequence, certain RAM areas shadowed by ROM could only be used for data storage and the video memory had a green and alternative green bank that could be switched by a hardware register. For sound it had a simple (4 bit ?) DAC. A comparator was included to serve as an ADC (primarily used for reading from tape drives). 
+## Loading software
 
-## What is working
+The Lynx loads by name and has no wildcard, so you have to type the name that is on the tape:
 
-* CPU.
-* Lynx 48/96/96+scorpion
-* Sound.
-* Screen.
-* Keyboard.
-* Tape loading.
-* Support for 96 and scorpion ROM.
-* Joysticks. 
-* CRTC
+    LOAD "NAME"        BASIC program, then RUN
+    MLOAD "NAME"       machine code (most start by themselves)
 
+The name on the tape is often not the file name (`Logichess` is `ECHECS`, `Demo 3` is `CODE`).
+While the tape is stopped, the bottom-left corner shows what to type, read from the tape itself:
+`TYPE LOAD "SNAKE"↵`, then `TYPE RUN↵` after a BASIC program has loaded. While the tape plays it
+shows `TAPE ▶ 0:43/ 2:03 x4` and a progress bar. Multi-file tapes, Level 9 adventures (data files
+without names) and custom loaders (e.g. Mazeman) work, because the tape is played as a signal the
+Lynx's own ROM reads. A tape starts rewound every time it is mounted.
 
-## Keys
+Tape formats:
 
-* F11 - Reset
-* F8  - Level9 adventures palete fix.
+- `.TAP` (the Jynx / PALE format, most of the software): the core rebuilds the tape signal from the
+  bytes, at the speed the Lynx asks for: the 128K reads tapes twice as fast as the 48K, and
+  `TAPE 1` to `TAPE 5` (900 to 2100 baud, set before LOAD) are followed on the 48K / 96K, which
+  together with 4x turbo makes `TAPE 5` loads very quick.
+- `.TZX` (made from recordings, e.g. with rcmolina's CamputersLYNX tools for Kyp's cores): played
+  as recorded; type the `TAPE n` the file name says before loading.
+- `.WAV` (8- or 16-bit PCM, any rate, e.g. real tape captures or lynx2wav output): played as
+  recorded, like the line-in; type the `TAPE n` it was recorded at.
 
-## Tape loading
+The Lynx has no `LOAD ""` wildcard (MAME: "there's no wildcard; you must specify the name"), so
+the name is always needed; the on-screen hint shows it.
 
-There are two ways to load tape files (.tap):
+ESC stops a `LOAD` that is waiting (wrong name, or the tape has ended), as on the real Lynx.
 
-### 1) using the MiSTer OSD menu
-At the moment, only BASIC programs, and machine code programs are supported. Data programs,
-and Level9 Computing programs are not supported yet. Better compatibility is coming soon, but this will play a lot of games.If
-a game doesn't load in 48k mode, try 96k mode by switching the setting in the OSD.
+Keyboard: the PC keys sit where the Lynx keys are, so `"` is Shift+2, `:` is the key right of `;`,
+and the letters give capitals without Shift.
 
-Using the OSD menu, machine code files will reset the core, and start automatically.
-If you are returned to the cursor prompt, it means the tape file is a BASIC program.
-To run the loaded BASIC programs, simply type RUN, and press enter. The program should run.
+Real cassettes can be loaded through the MiSTer's audio line-in.
 
+### Disk
 
-### 2) load audio via audio in 
+On a 96K or 128K with a `.LDF` image mounted: `XROM`, then `EXT DIR`, `EXT LOAD "NAME"`,
+`EXT MLOAD "NAME"`; CP/M disks start with `EXT BOOT`. The bottom-left corner shows the next step:
+`TYPE XROM↵`, then `TYPE EXT DIR↵` (or `TYPE EXT BOOT↵` for a CP/M boot disk, recognised from its
+first sector) until the disk is read; on a 48K it says `DISK: MODEL 96K / 128K`, as the 48K has no
+disk interface.
 
-This should be more compatible.
+## ROMs
 
-To convert .tap files to wav files (the same as you need to load on a real Lynx machine)
-* lynx2wav (Unix) (https://github.com/RW-FPGA-devel-Team/lynx2wav)
-* Mike's lynx utilities (Windows) http://retrowiki.es/viewtopic.php?f=31&t=200036021
+The core has the Lynx ROMs built in (the MAME sets `lynx48k`, `lynx96k`, `lynx128k` and the
+LynxDOS ROM, `roms/src`). `games/Lynx48/boot.rom` (64 KB, 48K / 96K) and `boot1.rom` (32 KB, 128K)
+replace them if present; `python3 tools/make_roms.py` shows the layout.
+
+## Credits
+
+- **Kyp** ([Kyp069](https://github.com/Kyp069)): the FPGA Lynx itself, first for ZX-Uno and SiDi
+  and now [lynx](https://github.com/Kyp069/lynx) (48K / 96K) and
+  [lynx128](https://github.com/Kyp069/lynx128), whose machines this core runs (`rtl/lynx_48k.v`,
+  `rtl/lynx_128k.v`, `rtl/matrix.v`).
+- **Shaeon** (Carlos Palmero, [shaeon/Lynx_MiSTer](https://github.com/shaeon/Lynx_MiSTer)): the
+  MiSTer merge of Kyp's two machines this core builds on, the ROM set and `tools/make_roms.py`,
+  `rtl/tape_ddr.sv` and the extended `rtl/tzxplayer.vhd`, the video blanking, `rtl/vram.v`.
+- **rampa069**, **Yo_Me** and the RetroWiki FPGA team
+  ([RW-FPGA-devel-Team](https://github.com/RW-FPGA-devel-Team)): the first MiSTer port and
+  [lynx2wav](https://github.com/RW-FPGA-devel-Team/lynx2wav).
+- **JasonA** (JasonCoombes-hr): the first tape loader through the OSD and the 128K start.
+- **JimmyStones** and **alanswx**: simulation; alanswx: maintenance, this version (with Claude).
+- **Fernando Mosquera**: the tape input through the line-in (ADC).
+- **Brendan Saricks**, **jackyangantelope**: framework updates and releases.
+- **Rodimus**: t80sv, the SystemVerilog Z80 (`rtl/t80sv`), from T80 by **Daniel Wallner**,
+  **MikeJ**, **TobiFlex**, **Sean Riddle**, **Sorgelig**, **Fabio Belavenuto** and **Charlie Ingley**.
+- **Sorgelig**: UM6845R and the WD1793 (with **Viacheslav Slavinsky** and **Stan Hodge**), the
+  MiSTer framework.
+- **György Szombathelyi**: tzxplayer.
+- **Jonathan Markland** ([Jynx](https://github.com/jonathan-markland/Jynx)): the tape waveform
+  the TAP player reproduces, and the cassette-port details.
+- **MAME** (camplynx driver: **Robbbert**, **Nigel Barnes**), **PALE** (Peter Todd), the
+  Camputers Lynx documentation collected by **ukscone** and the redrawn schematics of
+  **Board-Folk**: the hardware reference.
+
+## License
+
+The core is GPL v3 (`LICENSE`), as Kyp's and Shaeon's code it is built from. `sys/` is the
+MiSTer framework (GPL v2 or later, compatible); `rtl/t80sv` keeps T80's BSD-style license. The ROMs
+are the property of their authors and are included for preservation.
