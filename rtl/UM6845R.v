@@ -30,13 +30,10 @@ module UM6845R
 	input            RS,
 	input      [7:0] DI,
 	output reg [7:0] DO,
-		
+	
 	output reg       VSYNC,
 	output reg       HSYNC,
 	output           DE,
-	output           hBlank,
-	output           vBlank,
-
 	output           FIELD,
 	output           CURSOR,
 
@@ -52,9 +49,6 @@ assign MA = row_addr + hcc;
 assign RA = line | (field & interlace[0]);
 
 assign DE = de[R8_skew & ~{2{TYPE}}];
-
-assign hBlank = ~hde;
-assign vBlank = ~vde;
 
 reg [7:0] R0_h_total = 0;
 reg [7:0] R1_h_displayed = 0;
@@ -242,9 +236,15 @@ wire [3:0] de = {1'b0, dde[1:0], hde & vde & |R6_v_displayed};
 reg  [1:0] dde;
 always @(posedge CLOCK) if (CLKEN) dde <= {dde[0],de[0]};
 
+// Cursor blink
+reg[5:0] curcc;
+always @(posedge CLOCK) if (CLKEN) if(frame_new) curcc <= curcc+1'd1;
+
+wire cde = R10_cursor_mode == 2'b00 || (R10_cursor_mode == 2'b10 && curcc[4]) || (R10_cursor_mode == 2'b11 && curcc[5]);
+
 // Cursor control
 reg cursor_line;
-assign CURSOR = hde & vde & MA == {R14_cursor_h, R15_cursor_l} & cursor_line;
+assign CURSOR = hde & vde & MA == {R14_cursor_h, R15_cursor_l} & cursor_line & cde;
 
 always @(posedge CLOCK) begin
 

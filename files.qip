@@ -1,28 +1,21 @@
-# -------------------------------------------------------------------------- #
-#
-# Copyright (C) 2017  Intel Corporation. All rights reserved.
-# Your use of Intel Corporation's design tools, logic functions 
-# and other software and tools, and its AMPP partner logic 
-set_global_assignment -name VERILOG_FILE rtl/video.v
-set_global_assignment -name VERILOG_FILE rtl/audio.v
-set_global_assignment -name VERILOG_FILE rtl/spr.v
-set_global_assignment -name VERILOG_FILE rtl/multiboot.v
-set_global_assignment -name VERILOG_FILE rtl/lynx48.v
-set_global_assignment -name VERILOG_FILE rtl/lfsr.v
-set_global_assignment -name VERILOG_FILE rtl/keyboard.v
-set_global_assignment -name VERILOG_FILE rtl/cassette.v
-set_global_assignment -name VERILOG_FILE rtl/rom.v
-set_global_assignment -name VERILOG_FILE rtl/UM6845R.v
-set_global_assignment -name VERILOG_FILE rtl/dpr.v
+# Camputers Lynx: machine (rtl/lynx_core.sv) + Kyp's 48K/96K and 128K machines + t80sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/t80sv/t80sv_all.sv
 set_global_assignment -name VERILOG_FILE rtl/cpu.v
-set_global_assignment -name SYSTEMVERILOG_FILE rtl/bram.sv
-set_global_assignment -name VHDL_FILE rtl/T80/T80pa.vhd
-set_global_assignment -name VHDL_FILE rtl/T80/T80_Reg.vhd
-set_global_assignment -name VHDL_FILE rtl/T80/T80_Pack.vhd
-set_global_assignment -name VHDL_FILE rtl/T80/T80_MCode.vhd
-set_global_assignment -name VHDL_FILE rtl/T80/T80_ALU.vhd
-set_global_assignment -name VHDL_FILE rtl/T80/T80.vhd
-set_global_assignment -name QIP_FILE rtl/TV80/TV80.qip
+set_global_assignment -name VERILOG_FILE rtl/UM6845R.v
+set_global_assignment -name VERILOG_FILE rtl/matrix.v
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/wd1793.sv
+set_global_assignment -name VERILOG_FILE rtl/vram.v
+set_global_assignment -name VERILOG_FILE rtl/video_48k.v
+set_global_assignment -name VERILOG_FILE rtl/lynx_48k.v
+set_global_assignment -name VERILOG_FILE rtl/video_128k.v
+set_global_assignment -name VERILOG_FILE rtl/lynx_128k.v
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/lynx_core.sv
+set_global_assignment -name VHDL_FILE rtl/tzxplayer.vhd
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/tape_ddr.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/lynx_tap.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/lynx_wav.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/lynx_tape_overlay.sv
+set_global_assignment -name QIP_FILE rtl/pll.qip
 set_global_assignment -name QIP_FILE sys/sys.qip
 set_global_assignment -name SDC_FILE Lynx48.sdc
 set_global_assignment -name SYSTEMVERILOG_FILE Lynx48.sv
