@@ -44,3 +44,4 @@ verilator/x64/*
 verilator/out/
 refs/
 software/
+HANDOFF.md
